@@ -8,17 +8,17 @@ export function Arena() {
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[COLS / 2 - 0.5, -0.01, 0]}>
         <planeGeometry args={[100, 100]} />
         <MeshReflectorMaterial
-          blur={[0, 0]}
+          blur={[300, 100]} // Professional soft blur for "RTX" look
           resolution={2048}
-          mixBlur={0}
+          mixBlur={1}
           mixStrength={100}
-          roughness={0}
-          depthScale={1.4}
-          minDepthThreshold={0.5}
-          maxDepthThreshold={1.5}
-          color="#000000"
-          metalness={1}
-          mirror={1}
+          roughness={0.1}
+          depthScale={1.2}
+          minDepthThreshold={0.4}
+          maxDepthThreshold={1.4}
+          color="#050505"
+          metalness={0.8}
+          mirror={0.95} // High quality reflectivity
           distortion={0}
         />
       </mesh>

@@ -3,12 +3,12 @@ import { Environment, OrbitControls, PerspectiveCamera, Stars, Float, Text } fro
 import { useTetris } from './useTetris.ts';
 import { Block } from './components/Block.tsx';
 import { Arena } from './components/Arena.tsx';
-import { PIECES, COLS, ROWS, PieceType, rotateMatrix } from './types.ts';
+import { PIECES, COLS, ROWS, PieceType } from './types.ts';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, Play, Pause, RefreshCw, Cpu, Layers, Zap, ArrowLeft, ArrowRight, ArrowDown, RotateCcw, ChevronDown } from 'lucide-react';
 import { useState, useMemo, useRef, useEffect } from 'react';
 import confetti from 'canvas-confetti';
-import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
+import { EffectComposer, Bloom, Noise, Vignette, ChromaticAberration } from '@react-three/postprocessing';
 import * as THREE from 'three';
 
 const Tetromino = ({ type, position, rotation, isGhost = false }: { 
@@ -18,7 +18,14 @@ const Tetromino = ({ type, position, rotation, isGhost = false }: {
     isGhost?: boolean;
 }) => {
   const [px, py] = position;
-  const shape = useMemo(() => rotateMatrix(PIECES[type].shape, rotation), [type, rotation]);
+  const shape = useMemo(() => {
+    let result = PIECES[type].shape;
+    const count = rotation % 4;
+    for (let i = 0; i < count; i++) {
+        result = result[0].map((_, index) => result.map(row => row[index]).reverse());
+    }
+    return result;
+  }, [type, rotation]);
 
   return (
     <group>
@@ -37,122 +44,56 @@ const Tetromino = ({ type, position, rotation, isGhost = false }: {
   );
 };
 
-const WorldRig = ({ children }: { children: React.ReactNode }) => {
-  const groupRef = useRef<THREE.Group>(null);
-  const shake = useRef(0);
+const CameraRig = () => {
+  const [shake, setShake] = useState(0);
   
   useEffect(() => {
-    const handleLand = () => { shake.current = 0.25; };
+    const handleLand = () => setShake(0.3);
     window.addEventListener('tetris-land', handleLand);
     return () => window.removeEventListener('tetris-land', handleLand);
   }, []);
 
-  useFrame((_, delta) => {
-    if (groupRef.current) {
-      if (shake.current > 0) {
-        groupRef.current.position.x = (Math.random() - 0.5) * shake.current;
-        groupRef.current.position.y = (Math.random() - 0.5) * shake.current;
-        shake.current = Math.max(0, shake.current - delta * 1.5);
-      } else {
-        groupRef.current.position.set(0, 0, 0);
-      }
+  useFrame((state, delta) => {
+    if (shake > 0) {
+      state.camera.position.x += (Math.random() - 0.5) * shake;
+      state.camera.position.y += (Math.random() - 0.5) * shake;
+      setShake(s => Math.max(0, s - delta * 2));
     }
   });
 
-  return <group ref={groupRef}>{children}</group>;
-};
-
-// Shared resources for particles to prevent memory leaks and improve performance
-const PARTICLE_GEOMETRY = new THREE.BoxGeometry(0.12, 0.12, 0.12);
-
-const ParticleItem = ({ color, velocity }: { color: string, velocity: [number, number, number] }) => {
-    const meshRef = useRef<THREE.Mesh>(null);
-    const matRef = useRef<THREE.MeshStandardMaterial>(null);
-    const physics = useRef({
-        pos: new THREE.Vector3(0, 0, 0),
-        vel: new THREE.Vector3(...velocity),
-        scale: 1,
-        opacity: 1
-    });
-
-    useFrame((_, delta) => {
-        if (!meshRef.current || !matRef.current) return;
-        
-        const p = physics.current;
-        p.pos.addScaledVector(p.vel, delta);
-        p.vel.y -= 25 * delta; // Gravity
-        p.opacity = Math.max(0, p.opacity - delta * 0.75);
-        p.scale = Math.max(0, p.scale - delta * 0.5);
-        
-        meshRef.current.position.copy(p.pos);
-        meshRef.current.scale.setScalar(p.scale);
-        matRef.current.opacity = p.opacity;
-    });
-
-    return (
-        <mesh 
-            ref={meshRef} 
-            geometry={PARTICLE_GEOMETRY}
-        >
-            <meshStandardMaterial 
-                ref={matRef}
-                color={color} 
-                emissive={color}
-                emissiveIntensity={4}
-                transparent
-                roughness={1}
-                metalness={0}
-                toneMapped={false}
-            />
-        </mesh>
-    );
+  return null;
 };
 
 const ParticleBurst = () => {
     const [bursts, setBursts] = useState<{ id: number, position: [number, number, number], color: string }[]>([]);
     const nextId = useRef(0);
-    const isMounted = useRef(true);
 
     useEffect(() => {
-        isMounted.current = true;
-        const timeouts: NodeJS.Timeout[] = [];
-
         const handleClear = (e: any) => {
             const id = nextId.current++;
             const yPos = e.detail.y;
-            
-            if (isMounted.current) {
-                setBursts(prev => [...prev, { id, position: [COLS / 2, yPos, 0], color: e.detail.color || '#ffffff' }]);
-                
-                const tid = setTimeout(() => {
-                    if (isMounted.current) {
-                        setBursts(prev => prev.filter(b => b.id !== id));
-                    }
-                }, 2000);
-                timeouts.push(tid);
-            }
+            setBursts(prev => [...prev, { id, position: [COLS / 2, yPos, 0], color: e.detail.color || '#ffffff' }]);
+            setTimeout(() => {
+                setBursts(prev => prev.filter(b => b.id !== id));
+            }, 2000);
         };
 
         window.addEventListener('tetris-clear', handleClear);
-        return () => {
-            isMounted.current = false;
-            window.removeEventListener('tetris-clear', handleClear);
-            timeouts.forEach(clearTimeout);
-        };
+        return () => window.removeEventListener('tetris-clear', handleClear);
     }, []);
 
     return (
         <>
             {bursts.map(b => (
                 <group key={b.id} position={b.position}>
-                    {Array.from({ length: 20 }).map((_, i) => {
+                    {Array.from({ length: 30 }).map((_, i) => {
                         const angle = Math.random() * Math.PI * 2;
-                        const velocity = Math.random() * 8 + 2;
+                        const velocity = Math.random() * 10 + 2;
                         return (
                             <ParticleItem 
                                 key={i} 
                                 color={b.color} 
-                                velocity={[Math.cos(angle) * velocity, Math.random() * 10 + 2, Math.sin(angle) * velocity / 3]} 
+                                velocity={[Math.cos(angle) * velocity, Math.random() * 12, Math.sin(angle) * velocity / 3]} 
                             />
                         );
                     })}
@@ -162,11 +103,61 @@ const ParticleBurst = () => {
     );
 };
 
+const ParticleItem = ({ color, velocity }: { color: string, velocity: [number, number, number] }) => {
+    const meshRef = useRef<THREE.Mesh>(null);
+    const [vel] = useState(velocity);
+    const [opacity, setOpacity] = useState(1);
+
+    useFrame((_, delta) => {
+        if (meshRef.current) {
+            meshRef.current.position.x += vel[0] * delta;
+            meshRef.current.position.y += vel[1] * delta;
+            meshRef.current.position.z += vel[2] * delta;
+            vel[1] -= 25 * delta; 
+            setOpacity(o => Math.max(0, o - delta * 0.7));
+            meshRef.current.scale.multiplyScalar(0.97);
+        }
+    });
+
+    return (
+        <mesh ref={meshRef}>
+            <boxGeometry args={[0.2, 0.2, 0.2]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={5} transparent opacity={opacity} />
+        </mesh>
+    );
+};
+
 export default function App() {
   const { 
     grid, currentPiece, nextPieceType, score, level, lines, gameOver, paused, 
-    reset, gameStarted, start, move, rotate, drop, hardDrop, setPaused, ghostPosition
+    reset, gameStarted, start, move, rotate, drop, hardDrop, setPaused 
   } = useTetris();
+
+  const ghostPosition = useMemo(() => {
+    if (!currentPiece) return null;
+    let y = currentPiece.position[1];
+    
+    const checkCollision = (py: number) => {
+        let shape = PIECES[currentPiece.type].shape;
+        const count = currentPiece.rotation % 4;
+        for (let i = 0; i < count; i++) {
+            shape = shape[0].map((_, idx) => shape.map(row => row[idx]).reverse());
+        }
+        for (let r = 0; r < shape.length; r++) {
+            for (let c = 0; c < shape[r].length; c++) {
+                if (shape[r][c] !== 0) {
+                    const ny = py + r;
+                    const nx = currentPiece.position[0] + c;
+                    if (ny >= ROWS || (ny >= 0 && grid[ny][nx] !== null)) return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    while (!checkCollision(y + 1)) y++;
+    return [currentPiece.position[0], y] as [number, number];
+  }, [currentPiece, grid]);
 
   useEffect(() => {
       if (gameOver) {
@@ -187,6 +178,7 @@ export default function App() {
   return (
     <div className="relative w-full h-screen bg-black text-white font-sans overflow-hidden">
       <Canvas shadows dpr={[1, 2]}>
+        <CameraRig />
         <PerspectiveCamera makeDefault position={[COLS / 2, 11, 28]} fov={45} />
         <OrbitControls 
           enablePan={false} 
@@ -199,43 +191,48 @@ export default function App() {
         
         {/* Main "RTX" Directional Source */}
         <directionalLight 
-          position={[10, 20, 10]} 
-          intensity={6} 
+          position={[15, 25, 10]} 
+          intensity={4} 
           castShadow 
           shadow-mapSize={[2048, 2048]}
-          shadow-camera-far={50}
-          shadow-camera-left={-20}
-          shadow-camera-right={20}
-          shadow-camera-top={20}
-          shadow-camera-bottom={-20}
+          shadow-camera-far={60}
+          shadow-camera-left={-25}
+          shadow-camera-right={25}
+          shadow-camera-top={25}
+          shadow-camera-bottom={-25}
         />
 
-        <spotLight position={[COLS / 2, ROWS + 10, 15]} angle={0.4} penumbra={1} intensity={6} castShadow />
+        {/* Right Corner Accent Light */}
+        <spotLight 
+          position={[25, 15, 5]} 
+          angle={0.6} 
+          penumbra={1} 
+          intensity={8} 
+          color="#ffaa44" // Warm amber light from the right
+          castShadow 
+        />
+
+        <spotLight position={[COLS / 2, ROWS + 10, 15]} angle={0.4} penumbra={1} intensity={3} castShadow />
         
         {/* Physical Rim Lights */}
-        <pointLight position={[-10, 5, 5]} intensity={1.5} color="#fff" />
-        <pointLight position={[COLS + 10, 5, 5]} intensity={1.5} color="#fff" />
+        <pointLight position={[-15, 10, 5]} intensity={2} color="#44aaff" /> // Subtle blue fill from left
+        <pointLight position={[COLS + 15, 10, 5]} intensity={2} color="#ffffff" />
 
         <Environment preset="night" />
+
+        <Arena />
+        <ParticleBurst />
         
-        {/* Cinematic Rim Light */}
-        <pointLight position={[5, 10, -10]} intensity={25} color="#fff" />
+        {/* Active Piece */}
+        {!gameOver && currentPiece && <Tetromino type={currentPiece.type} position={currentPiece.position} rotation={currentPiece.rotation} />}
 
-        <WorldRig>
-          <Arena />
-          <ParticleBurst />
-          
-          {/* Active Piece */}
-          {!gameOver && currentPiece && <Tetromino type={currentPiece.type} position={currentPiece.position} rotation={currentPiece.rotation} />}
+        {/* Ghost Piece */}
+        {!gameOver && ghostPosition && currentPiece && <Tetromino type={currentPiece.type} position={ghostPosition} rotation={currentPiece.rotation} isGhost />}
 
-          {/* Ghost Piece */}
-          {!gameOver && ghostPosition && currentPiece && <Tetromino type={currentPiece.type} position={ghostPosition} rotation={currentPiece.rotation} isGhost />}
-
-          {/* Grid Blocks */}
-          <group>
-              {grid.map((row, r) => row.map((type, c) => type ? <Block key={`${r}-${c}`} position={[c, ROWS - r - 0.5, 0]} color={PIECES[type].color} /> : null))}
-          </group>
-        </WorldRig>
+        {/* Grid Blocks */}
+        <group>
+            {grid.map((row, r) => row.map((type, c) => type ? <Block key={`${r}-${c}`} position={[c, ROWS - r - 0.5, 0]} color={PIECES[type].color} glow /> : null))}
+        </group>
 
         <Stars radius={150} depth={50} count={2000} factor={4} saturation={0} fade speed={1} />
         
@@ -243,9 +240,9 @@ export default function App() {
             <Text position={[COLS / 2, ROWS + 4, -5]} fontSize={2.5} color="white">ULTRA TETRIS</Text>
         </Float>
 
-        <EffectComposer enableNormalPass={false} multisampling={4}>
-          <Bloom luminanceThreshold={1.0} mipmapBlur intensity={0.6} radius={0.7} />
-          <Vignette offset={0.1} darkness={1.2} />
+        <EffectComposer enableNormalPass={false} multisampling={8}>
+          <Bloom luminanceThreshold={1} mipmapBlur intensity={0.3} radius={0.5} />
+          <Vignette offset={0.1} darkness={1.1} />
         </EffectComposer>
       </Canvas>
 
